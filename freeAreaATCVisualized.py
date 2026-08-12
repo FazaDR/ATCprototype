@@ -181,56 +181,56 @@ class TopologicalMap:
 
         return node_id
 
-    # def remove_node(self, node_id: int):
-    #     """
-    #     Remove a node using swap-delete.
+    def remove_node(self, node_id: int):
+        """
+        Remove a node using swap-delete.
 
-    #     The node ID itself is permanently retired.
-    #     The final active array slot is moved into the
-    #     deleted node's slot.
-    #     """
+        The node ID itself is permanently retired.
+        The final active array slot is moved into the
+        deleted node's slot.
+        """
 
-    #     if node_id not in self.id_to_slot:
-    #         return
+        if node_id not in self.id_to_slot:
+            return
 
-    #     slot = self.id_to_slot[node_id]
+        slot = self.id_to_slot[node_id]
 
-    #     # Remove all graph connections first
-    #     for neighbor in list(self.graph[node_id]):
-    #         self.remove_edge(node_id, neighbor)
+        # Remove all graph connections first
+        for neighbor in list(self.graph[node_id]):
+            self.remove_edge(node_id, neighbor)
 
-    #     self.graph.pop(node_id, None)
+        self.graph.pop(node_id, None)
 
-    #     # Last active node
-    #     last_slot = self.node_count - 1
+        # Last active node
+        last_slot = self.node_count - 1
 
-    #     # If the node is not already the last node,
-    #     # move the last node into the deleted slot.
-    #     if slot != last_slot:
+        # If the node is not already the last node,
+        # move the last node into the deleted slot.
+        if slot != last_slot:
 
-    #         moved_id = self.node_ids[last_slot]
+            moved_id = self.node_ids[last_slot]
 
-    #         self.positions[slot] = \
-    #             self.positions[last_slot]
+            self.positions[slot] = \
+                self.positions[last_slot]
 
-    #         self.normals[slot] = \
-    #             self.normals[last_slot]
+            self.normals[slot] = \
+                self.normals[last_slot]
 
-    #         self.traversability[slot] = \
-    #             self.traversability[last_slot]
+            self.traversability[slot] = \
+                self.traversability[last_slot]
 
-    #         self.node_ids[slot] = moved_id
+            self.node_ids[slot] = moved_id
 
-    #         # Update the moved node's slot
-    #         self.id_to_slot[moved_id] = slot
+            # Update the moved node's slot
+            self.id_to_slot[moved_id] = slot
 
-    #     # Remove the deleted node from ID -> slot
-    #     del self.id_to_slot[node_id]
+        # Remove the deleted node from ID -> slot
+        del self.id_to_slot[node_id]
 
-    #     # One fewer active node
-    #     self.node_count -= 1
+        # One fewer active node
+        self.node_count -= 1
 
-    #     return slot, last_slot
+        return slot, last_slot
 
     # ==========================================================
     # Edge Operations
@@ -313,19 +313,23 @@ class ATCDT:
     def __init__(
         self,
         vigilance=0.5,
-        lambda_points=4000
+        lambda_points=4000,
+        free_area_sectors=24,
+        horizontal_band=0.15,
+        free_area_distance=0.5
     ):
 
         self.vigilance = vigilance
         self.lambda_points = lambda_points
 
-        # Γdel
+        self.free_area_sectors = free_area_sectors
+        self.horizontal_band = horizontal_band
+        self.free_area_distance = free_area_distance
+
         self.deleted_edge_ages = []
 
-        # G = (V, h_pos, E)
         self.map = TopologicalMap()
 
-        # m_i in Eq. (6)
         self.winner_count = np.zeros(
             self.map.capacity,
             dtype=np.int32
@@ -493,11 +497,17 @@ class ATCDT:
             self.map.remove_edge(a, b)
 
 
-    def process_frame(self, point_cloud):
+    def process_frame(
+        self,
+        point_cloud,
+        robot_position,
+        visualizer=None,
+        update_every=50
+    ):
 
         sampled = self.sample_points(point_cloud)
 
-        for point in sampled:
+        for i, point in enumerate(sampled):
 
             s1, s2, d1, d2 = self.winner_search(point)
 
@@ -548,6 +558,15 @@ class ATCDT:
 
                     self.map.add_edge(s1, s2)
 
+            if (
+                visualizer is not None and
+                i % update_every == 0
+            ):
+                visualizer.update(
+                    self,
+                    sampled
+                )
+
         # ------------------------------------------------------
         # Step 6: Update gmax and remove old edges
         # ------------------------------------------------------
@@ -555,6 +574,21 @@ class ATCDT:
         gmax = self.compute_gmax()
 
         self.remove_old_edges(gmax)
+
+        # ------------------------------------------------------
+        # Free-area node deletion
+        # ------------------------------------------------------
+
+        self.delete_free_area_nodes(
+            point_cloud,
+            robot_position
+        )
+
+        if visualizer is not None:
+            visualizer.update(
+                self,
+                sampled
+            )
 
     def compute_gthr(self):
 
@@ -604,15 +638,373 @@ class ATCDT:
             gthr * (1.0 - weight)
         )
 
+    def horizontal_scan(self, point_cloud, robot_position):
+
+        point_cloud = np.asarray(
+            point_cloud,
+            dtype=np.float32
+        )
+
+        robot_position = np.asarray(
+            robot_position,
+            dtype=np.float32
+        )
+
+        vertical_difference = np.abs(
+            point_cloud[:, 1] - robot_position[1]
+        )
+
+        mask = (
+            vertical_difference <= self.horizontal_band
+        )
+
+        return point_cloud[mask]
+
+    def find_proximity_points(
+        self,
+        point_cloud,
+        robot_position
+    ):
+
+        scan = self.horizontal_scan(
+            point_cloud,
+            robot_position
+        )
+
+        if len(scan) == 0:
+            return []
+
+        dx = scan[:, 0] - robot_position[0]
+        dz = scan[:, 2] - robot_position[2]
+
+        distances = np.sqrt(
+            dx * dx +
+            dz * dz
+        )
+
+        angles = np.arctan2(dz, dx)
+
+        angles = np.mod(
+            angles,
+            2.0 * np.pi
+        )
+
+        sector_width = (
+            2.0 * np.pi /
+            self.free_area_sectors
+        )
+
+        sector_indices = (
+            angles / sector_width
+        ).astype(np.int32)
+
+        proximity_points = []
+
+        for sector in range(
+            self.free_area_sectors
+        ):
+
+            mask = (
+                sector_indices == sector
+            )
+
+            if not np.any(mask):
+                continue
+
+            sector_indices_local = np.where(mask)[0]
+
+            closest_local = sector_indices_local[
+                np.argmin(
+                    distances[sector_indices_local]
+                )
+            ]
+
+            proximity_points.append(
+                scan[closest_local]
+            )
+
+        return proximity_points
+
+    def node_in_free_area(
+        self,
+        node_position,
+        proximity_points,
+        robot_position
+    ):
+
+        if len(proximity_points) == 0:
+            return False
+
+        node = np.asarray(
+            node_position,
+            dtype=np.float32
+        )
+
+        robot = np.asarray(
+            robot_position,
+            dtype=np.float32
+        )
+
+        node_2d = np.array([
+            node[0],
+            node[2]
+        ])
+
+        robot_2d = np.array([
+            robot[0],
+            robot[2]
+        ])
+
+        for r in proximity_points:
+
+            r_2d = np.array([
+                r[0],
+                r[2]
+            ])
+
+            q = r_2d - robot_2d
+
+            norm_q = np.linalg.norm(q)
+
+            if norm_q < 1e-6:
+                continue
+
+            q /= norm_q
+
+            value = np.dot(
+                q,
+                r_2d - node_2d
+            )
+
+            if value <= 0:
+                return False
+
+        return True
+
+
+    def delete_free_area_nodes(
+        self,
+        point_cloud,
+        robot_position
+    ):
+
+        proximity_points = self.find_proximity_points(
+            point_cloud,
+            robot_position
+        )
+
+        if len(proximity_points) < 2:
+            return
+
+        nodes_to_delete = []
+
+        active_positions = (
+            self.map.positions[
+                :self.map.node_count
+            ]
+        )
+
+        active_ids = (
+            self.map.node_ids[
+                :self.map.node_count
+            ]
+        )
+
+        for slot, node_id in enumerate(active_ids):
+
+            node_position = active_positions[slot]
+
+            # -----------------------------------------
+            # Only nodes inside the detected free area
+            # are candidates for deletion.
+            # -----------------------------------------
+
+            if not self.node_in_free_area(
+                node_position,
+                proximity_points,
+                robot_position
+            ):
+                continue
+
+            # -----------------------------------------
+            # Eq. (8)
+            # Find closest point cloud to this node.
+            # -----------------------------------------
+
+            distances = np.linalg.norm(
+                point_cloud - node_position,
+                axis=1
+            )
+
+            min_distance = np.min(
+                distances
+            )
+
+            if (
+                min_distance >
+                self.free_area_distance
+            ):
+                nodes_to_delete.append(
+                    int(node_id)
+                )
+
+        # Delete after iteration
+        # so array slots remain valid during testing.
+        for node_id in nodes_to_delete:
+
+            self.remove_node(node_id)
+
+
+class ATCVisualizer:
+
+    def __init__(self, first_scan):
+
+        self.vis = o3d.visualization.Visualizer()
+        self.vis.create_window("ATC")
+
+        self.scan_cloud = o3d.geometry.PointCloud()
+        self.scan_cloud.points = \
+            o3d.utility.Vector3dVector(first_scan)
+
+        self.scan_cloud.paint_uniform_color(
+            [0.8, 0.8, 0.8]
+        )
+
+        self.node_cloud = o3d.geometry.PointCloud()
+
+        self.line_set = o3d.geometry.LineSet()
+
+        self.vis.add_geometry(self.scan_cloud)
+        self.vis.add_geometry(self.node_cloud)
+        self.vis.add_geometry(self.line_set)
+
+    def update(self, atc, scan=None):
+
+        # ---------------------------------
+        # Scan
+        # ---------------------------------
+
+        if scan is not None:
+
+            self.scan_cloud.points = \
+                o3d.utility.Vector3dVector(scan)
+
+            self.scan_cloud.paint_uniform_color(
+                [0.75, 0.75, 0.75]
+            )
+
+            self.vis.update_geometry(
+                self.scan_cloud
+            )
+
+        # ---------------------------------
+        # Nodes
+        # ---------------------------------
+
+        if atc.map.node_count == 0:
+
+            pts = np.empty(
+                (0, 3),
+                dtype=np.float32
+            )
+
+        else:
+
+            pts = atc.map.positions[
+                :atc.map.node_count
+            ]
+
+        self.node_cloud.points = \
+            o3d.utility.Vector3dVector(pts)
+
+        self.node_cloud.paint_uniform_color(
+            [1, 0, 0]
+        )
+
+        # ---------------------------------
+        # Edges
+        # ---------------------------------
+
+        self.line_set.points = \
+            o3d.utility.Vector3dVector(pts)
+
+        edge_slots = []
+
+        for a, b in atc.map.edges():
+
+            if (
+                a not in atc.map.id_to_slot or
+                b not in atc.map.id_to_slot
+            ):
+                continue
+
+            edge_slots.append([
+                atc.map.get_slot(a),
+                atc.map.get_slot(b)
+            ])
+
+        if len(edge_slots) == 0:
+
+            edge_slots = np.empty(
+                (0, 2),
+                dtype=np.int32
+            )
+
+        else:
+
+            edge_slots = np.asarray(
+                edge_slots,
+                dtype=np.int32
+            )
+
+        self.line_set.lines = \
+            o3d.utility.Vector2iVector(
+                edge_slots
+            )
+
+        colors = np.zeros(
+            (len(edge_slots), 3),
+            dtype=np.float64
+        )
+
+        colors[:] = [0, 1, 0]
+
+        self.line_set.colors = \
+            o3d.utility.Vector3dVector(colors)
+
+        self.vis.update_geometry(
+            self.node_cloud
+        )
+
+        self.vis.update_geometry(
+            self.line_set
+        )
+
+        self.vis.poll_events()
+        self.vis.update_renderer()
+
+    def close(self):
+
+        self.vis.destroy_window()
 
 class ScanDataset:
 
-    def __init__(self, folder):
+    def __init__(
+        self,
+        folder,
+        pose_file
+    ):
 
         self.folder = Path(folder)
 
         self.files = sorted(
             self.folder.glob("scan_*.csv")
+        )
+
+        self.poses = np.loadtxt(
+            pose_file,
+            delimiter=",",
+            skiprows=1
         )
 
     def __len__(self):
@@ -627,6 +1019,13 @@ class ScanDataset:
             comments="#",
             skiprows=5
         ).astype(np.float32)
+
+    def get_pose(self, idx):
+
+        return self.poses[idx, 2:5].astype(
+            np.float32
+        )
+    
 
 
 def visualize_map(atc: ATCDT):
@@ -691,28 +1090,48 @@ def visualize_map(atc: ATCDT):
 if __name__ == "__main__":
 
     dataset = ScanDataset(
-        "/home/faza/Documents/pythonPrj/ta_test/dataset/scans"
+        "dataset/scans",
+        "dataset/poses.csv"
     )
 
+    scan = dataset[0]
+
     atc = ATCDT(
-        vigilance=0.3,
+        vigilance=0.5,
         lambda_points=6000
+    )
+
+    visualizer = ATCVisualizer(scan)
+
+    visualizer.update(
+        atc,
+        scan
     )
 
     for i in range(len(dataset)):
 
         scan = dataset[i]
 
+        pose = dataset.get_pose(i)
+
         print(
             f"Processing frame {i} "
-            f"({len(scan)} points)"
+            f"({len(scan)} points) "
+            f"pose={pose}"
         )
 
-        atc.process_frame(scan)
+        atc.process_frame(
+            scan,
+            pose,
+            visualizer,
+            update_every=20
+        )
 
     print()
     print("Finished.")
     print("Nodes :", atc.map.node_count)
     print("Edges :", atc.map.num_edges())
+
+    visualizer.close()
 
     visualize_map(atc)

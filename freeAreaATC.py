@@ -691,7 +691,8 @@ def visualize_map(atc: ATCDT):
 if __name__ == "__main__":
 
     dataset = ScanDataset(
-        "/home/faza/Documents/pythonPrj/ta_test/dataset/scans"
+        "dataset/scans",
+        "dataset/poses.csv"
     )
 
     atc = ATCDT(
