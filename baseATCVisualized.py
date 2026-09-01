@@ -1,26 +1,25 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, List, Set
+from typing import Dict
 import numpy as np
 from pathlib import Path
 import open3d as o3d
 
+
 class TopologicalMap:
     """
-    Topological map used by ATC-DT.
+    Positional topological map used by ATC-DT.
 
     Corresponds to
 
-        G = (V, {h_i}, E)
+        G = (V, h_pos, E_pos)
 
     where
 
-        V          : node IDs
-        positions  : h_pos
-        normals    : h_nor (future)
-        traversability : h_tra (future)
-        graph      : E_pos
+        V         : node IDs
+        positions : h_pos
+        graph     : E_pos
     """
 
     def __init__(self):
@@ -38,22 +37,12 @@ class TopologicalMap:
         # Allocated storage capacity
         self.capacity = 1024
 
-        # Dense node storage.
+        # Dense positional node storage.
         #
         # Only [0 : node_count] contains active nodes.
         self.positions = np.empty(
             (self.capacity, 3),
             dtype=np.float32
-        )
-
-        self.normals = np.empty(
-            (self.capacity, 3),
-            dtype=np.float32
-        )
-
-        self.traversability = np.empty(
-            self.capacity,
-            dtype=np.int8
         )
 
         # Stable node ID stored at each array slot.
@@ -73,8 +62,10 @@ class TopologicalMap:
         # Example:
         #   id_to_slot[12] = 1
         self.id_to_slot: Dict[int, int] = {}
+
         # -----------------------------
         # Edge set E_pos
+        #
         # graph[a][b] = edge age
         # -----------------------------
 
@@ -107,16 +98,6 @@ class TopologicalMap:
             dtype=np.float32
         )
 
-        new_normals = np.empty(
-            (new_capacity, 3),
-            dtype=np.float32
-        )
-
-        new_traversability = np.empty(
-            new_capacity,
-            dtype=np.int8
-        )
-
         new_node_ids = np.empty(
             new_capacity,
             dtype=np.int32
@@ -125,18 +106,10 @@ class TopologicalMap:
         new_positions[:self.node_count] = \
             self.positions[:self.node_count]
 
-        new_normals[:self.node_count] = \
-            self.normals[:self.node_count]
-
-        new_traversability[:self.node_count] = \
-            self.traversability[:self.node_count]
-
         new_node_ids[:self.node_count] = \
             self.node_ids[:self.node_count]
 
         self.positions = new_positions
-        self.normals = new_normals
-        self.traversability = new_traversability
         self.node_ids = new_node_ids
 
         self.capacity = new_capacity
@@ -147,7 +120,7 @@ class TopologicalMap:
 
     def add_node(self, position: np.ndarray) -> int:
         """
-        Add a new node.
+        Add a new positional node.
 
         Returns a stable node ID.
         """
@@ -165,13 +138,10 @@ class TopologicalMap:
         node_id = self.next_node_id
         self.next_node_id += 1
 
-        # Store node data
+        # Store position
         self.positions[slot] = position
 
-        self.normals[slot] = 0.0
-
-        self.traversability[slot] = 0
-
+        # Store stable node ID
         self.node_ids[slot] = node_id
 
         # ID -> slot
@@ -213,18 +183,12 @@ class TopologicalMap:
             self.positions[slot] = \
                 self.positions[last_slot]
 
-            self.normals[slot] = \
-                self.normals[last_slot]
-
-            self.traversability[slot] = \
-                self.traversability[last_slot]
-
             self.node_ids[slot] = moved_id
 
-            # Update the moved node's slot
+            # Update moved node's slot
             self.id_to_slot[moved_id] = slot
 
-        # Remove the deleted node from ID -> slot
+        # Remove deleted node from ID -> slot
         del self.id_to_slot[node_id]
 
         # One fewer active node
@@ -265,6 +229,7 @@ class TopologicalMap:
         visited = set()
 
         for a in self.graph:
+
             for b, age in self.graph[a].items():
 
                 if (b, a) in visited:
@@ -273,7 +238,10 @@ class TopologicalMap:
                 visited.add((a, b))
                 ages.append(age)
 
-        return np.asarray(ages, dtype=np.float32)
+        return np.asarray(
+            ages,
+            dtype=np.float32
+        )
 
     def num_edges(self):
 
@@ -282,6 +250,7 @@ class TopologicalMap:
         visited = set()
 
         for a in self.graph:
+
             for b in self.graph[a]:
 
                 if (b, a) in visited:
@@ -298,14 +267,9 @@ class TopologicalMap:
 
         return self.positions[slot]
 
-
     def get_slot(self, node_id: int) -> int:
 
         return self.id_to_slot[node_id]
-
-    
-
-
 
 
 class ATCDT:
@@ -322,7 +286,9 @@ class ATCDT:
         # Γdel
         self.deleted_edge_ages = []
 
-        # G = (V, h_pos, E)
+        # Positional topology:
+        #
+        # G = (V, h_pos, E_pos)
         self.map = TopologicalMap()
 
         # m_i in Eq. (6)
@@ -330,13 +296,6 @@ class ATCDT:
             self.map.capacity,
             dtype=np.int32
         )
-
-
-    # def update_normal_map(self):
-    #     pass
-
-    # def update_traversability_map(self):
-    #     pass
 
     def sample_points(self, points):
 
@@ -366,14 +325,19 @@ class ATCDT:
                 dtype=np.int32
             )
 
-            new_winner_count[:self.map.node_count - 1] = \
-                self.winner_count[:self.map.node_count - 1]
+            new_winner_count[
+                :self.map.node_count - 1
+            ] = self.winner_count[
+                :self.map.node_count - 1
+            ]
 
             self.winner_count = new_winner_count
 
         slot = self.map.get_slot(node_id)
 
-        # Paper Eq. (3): M_N+1 = 1
+        # Paper Eq. (3):
+        #
+        # M_N+1 = 1
         self.winner_count[slot] = 1
 
         return node_id
@@ -394,7 +358,7 @@ class ATCDT:
             self.winner_count[slot] = \
                 self.winner_count[last_slot]
 
-        # Remove node from the topology
+        # Remove node from topology
         self.map.remove_node(node_id)
 
     def winner_search(self, point):
@@ -402,7 +366,9 @@ class ATCDT:
         if self.map.node_count == 0:
             return None, None, np.inf, np.inf
 
-        active_positions = self.map.positions[:self.map.node_count]
+        active_positions = self.map.positions[
+            :self.map.node_count
+        ]
 
         dist = np.linalg.norm(
             active_positions - point,
@@ -412,6 +378,7 @@ class ATCDT:
         if self.map.node_count == 1:
 
             slot = 0
+
             node_id = self.map.node_ids[slot]
 
             return (
@@ -421,29 +388,45 @@ class ATCDT:
                 np.inf
             )
 
-        order = np.argpartition(dist, 1)
+        order = np.argpartition(
+            dist,
+            1
+        )
 
         s1_slot = order[0]
         s2_slot = order[1]
 
         if dist[s2_slot] < dist[s1_slot]:
-            s1_slot, s2_slot = s2_slot, s1_slot
+
+            s1_slot, s2_slot = \
+                s2_slot, s1_slot
 
         d1 = dist[s1_slot]
         d2 = dist[s2_slot]
 
-        s1 = int(self.map.node_ids[s1_slot])
-        s2 = int(self.map.node_ids[s2_slot])
+        s1 = int(
+            self.map.node_ids[s1_slot]
+        )
+
+        s2 = int(
+            self.map.node_ids[s2_slot]
+        )
 
         return s1, s2, d1, d2
 
+    def update_existing_node(
+        self,
+        point,
+        winner
+    ):
 
-    def update_existing_node(self, point, winner):
-
-        winner_slot = self.map.get_slot(winner)
+        winner_slot = self.map.get_slot(
+            winner
+        )
 
         self.winner_count[winner_slot] += 1
 
+        # Eq. (6)
         lr = 1.0 / (
             10 * self.winner_count[winner_slot]
         )
@@ -454,12 +437,16 @@ class ATCDT:
                 self.map.positions[winner_slot]
             )
 
+        # Eq. (7)
         for neighbor in self.map.neighbors(winner):
 
-            neighbor_slot = self.map.get_slot(neighbor)
+            neighbor_slot = self.map.get_slot(
+                neighbor
+            )
 
             lr = 1.0 / (
-                100 * self.winner_count[neighbor_slot]
+                100 *
+                self.winner_count[neighbor_slot]
             )
 
             self.map.positions[neighbor_slot] += \
@@ -467,7 +454,6 @@ class ATCDT:
                     point -
                     self.map.positions[neighbor_slot]
                 )
-
 
     def remove_old_edges(self, gmax):
 
@@ -485,13 +471,18 @@ class ATCDT:
                 visited.add((a, b))
 
                 if age > gmax:
-                    self.deleted_edge_ages.append(age)
-                    remove_edges.append((a,b))
+
+                    self.deleted_edge_ages.append(
+                        age
+                    )
+
+                    remove_edges.append(
+                        (a, b)
+                    )
 
         for a, b in remove_edges:
 
             self.map.remove_edge(a, b)
-
 
     def process_frame(
         self,
@@ -500,27 +491,32 @@ class ATCDT:
         update_every=50
     ):
 
-        sampled = self.sample_points(point_cloud)
+        sampled = self.sample_points(
+            point_cloud
+        )
 
         for i, point in enumerate(sampled):
 
-            s1, s2, d1, d2 = self.winner_search(point)
+            s1, s2, d1, d2 = \
+                self.winner_search(point)
 
             # --------------------------------------------------
             # Case (a): Add new node
-            # ds1 > vigilance
+            #
+            # d_s1 > vigilance
             # --------------------------------------------------
 
             if d1 > self.vigilance:
 
                 self.add_node(point)
 
-                # Paper: after adding a node,
-                # continue to the next input point.
+                # After adding a node,
+                # continue to next input point.
                 continue
 
             # --------------------------------------------------
-            # Cases (b) and (c): Update existing node
+            # Cases (b) and (c):
+            # Update existing node
             # --------------------------------------------------
 
             self.update_existing_node(
@@ -529,17 +525,24 @@ class ATCDT:
             )
 
             # --------------------------------------------------
-            # Step 5: Age edges connected to s1
+            # Step 5:
+            # Age edges connected to s1
             # --------------------------------------------------
 
-            for neighbor in list(self.map.neighbors(s1)):
+            for neighbor in list(
+                self.map.neighbors(s1)
+            ):
 
                 self.map.graph[s1][neighbor] += 1
+
                 self.map.graph[neighbor][s1] += 1
 
             # --------------------------------------------------
-            # Case (c): Add/reset s1-s2 edge
-            # ds2 <= vigilance
+            # Case (c):
+            #
+            # Add/reset s1-s2 edge
+            #
+            # d_s2 <= vigilance
             # --------------------------------------------------
 
             if d2 <= self.vigilance:
@@ -551,19 +554,25 @@ class ATCDT:
 
                 else:
 
-                    self.map.add_edge(s1, s2)
+                    self.map.add_edge(
+                        s1,
+                        s2
+                    )
 
             if (
-                visualizer is not None and
-                i % update_every == 0
+                visualizer is not None
+                and i % update_every == 0
             ):
+
                 visualizer.update(
                     self,
                     sampled
                 )
 
         # ------------------------------------------------------
-        # Step 6: Update gmax and remove old edges
+        # Step 6:
+        #
+        # Update gmax and remove old edges
         # ------------------------------------------------------
 
         gmax = self.compute_gmax()
@@ -571,6 +580,7 @@ class ATCDT:
         self.remove_old_edges(gmax)
 
         if visualizer is not None:
+
             visualizer.update(
                 self,
                 sampled
@@ -583,13 +593,19 @@ class ATCDT:
         if len(ages) == 0:
             return np.inf
 
-        q3 = np.percentile(ages, 75)
-        q1 = np.percentile(ages, 25)
+        q3 = np.percentile(
+            ages,
+            75
+        )
+
+        q1 = np.percentile(
+            ages,
+            25
+        )
 
         iqr = q3 - q1
 
         return q3 + iqr
-
 
     def compute_gmax(self):
 
@@ -597,30 +613,43 @@ class ATCDT:
 
         if len(current) < 4:
 
-            if len(self.deleted_edge_ages) > 0:
-                return np.mean(self.deleted_edge_ages)
+            if len(
+                self.deleted_edge_ages
+            ) > 0:
+
+                return np.mean(
+                    self.deleted_edge_ages
+                )
 
             return np.inf
 
         gthr = self.compute_gthr()
 
-        if len(self.deleted_edge_ages) == 0:
+        if len(
+            self.deleted_edge_ages
+        ) == 0:
+
             return gthr
 
-        gdel = np.mean(self.deleted_edge_ages)
+        gdel = np.mean(
+            self.deleted_edge_ages
+        )
 
         total = (
-            len(current) +
+            len(current)
+            +
             len(self.deleted_edge_ages)
         )
 
         weight = (
-            len(self.deleted_edge_ages) /
+            len(self.deleted_edge_ages)
+            /
             total
         )
 
         return (
-            gdel * weight +
+            gdel * weight
+            +
             gthr * (1.0 - weight)
         )
 
@@ -629,24 +658,40 @@ class ATCVisualizer:
 
     def __init__(self, first_scan):
 
-        self.vis = o3d.visualization.Visualizer()
+        self.vis = \
+            o3d.visualization.Visualizer()
+
         self.vis.create_window("ATC")
 
-        self.scan_cloud = o3d.geometry.PointCloud()
+        self.scan_cloud = \
+            o3d.geometry.PointCloud()
+
         self.scan_cloud.points = \
-            o3d.utility.Vector3dVector(first_scan)
+            o3d.utility.Vector3dVector(
+                first_scan
+            )
 
         self.scan_cloud.paint_uniform_color(
             [0.8, 0.8, 0.8]
         )
 
-        self.node_cloud = o3d.geometry.PointCloud()
+        self.node_cloud = \
+            o3d.geometry.PointCloud()
 
-        self.line_set = o3d.geometry.LineSet()
+        self.line_set = \
+            o3d.geometry.LineSet()
 
-        self.vis.add_geometry(self.scan_cloud)
-        self.vis.add_geometry(self.node_cloud)
-        self.vis.add_geometry(self.line_set)
+        self.vis.add_geometry(
+            self.scan_cloud
+        )
+
+        self.vis.add_geometry(
+            self.node_cloud
+        )
+
+        self.vis.add_geometry(
+            self.line_set
+        )
 
     def update(self, atc, scan=None):
 
@@ -657,7 +702,9 @@ class ATCVisualizer:
         if scan is not None:
 
             self.scan_cloud.points = \
-                o3d.utility.Vector3dVector(scan)
+                o3d.utility.Vector3dVector(
+                    scan
+                )
 
             self.scan_cloud.paint_uniform_color(
                 [0.75, 0.75, 0.75]
@@ -685,7 +732,9 @@ class ATCVisualizer:
             ]
 
         self.node_cloud.points = \
-            o3d.utility.Vector3dVector(pts)
+            o3d.utility.Vector3dVector(
+                pts
+            )
 
         self.node_cloud.paint_uniform_color(
             [1, 0, 0]
@@ -696,14 +745,17 @@ class ATCVisualizer:
         # ---------------------------------
 
         self.line_set.points = \
-            o3d.utility.Vector3dVector(pts)
+            o3d.utility.Vector3dVector(
+                pts
+            )
 
         edge_slots = []
 
         for a, b in atc.map.edges():
 
             if (
-                a not in atc.map.id_to_slot or
+                a not in atc.map.id_to_slot
+                or
                 b not in atc.map.id_to_slot
             ):
                 continue
@@ -740,7 +792,9 @@ class ATCVisualizer:
         colors[:] = [0, 1, 0]
 
         self.line_set.colors = \
-            o3d.utility.Vector3dVector(colors)
+            o3d.utility.Vector3dVector(
+                colors
+            )
 
         self.vis.update_geometry(
             self.node_cloud
@@ -756,6 +810,7 @@ class ATCVisualizer:
     def close(self):
 
         self.vis.destroy_window()
+
 
 class ScanDataset:
 
@@ -784,39 +839,55 @@ class ScanDataset:
 def visualize_map(atc: ATCDT):
 
     vis = o3d.visualization.Visualizer()
-    vis.create_window("ATC-DT Result")
 
-    #
-    # Nodes
-    #
-
-    node_cloud = o3d.geometry.PointCloud()
-
-    node_cloud.points = o3d.utility.Vector3dVector(
-        atc.map.positions[:atc.map.node_count]
+    vis.create_window(
+        "ATC-DT Result"
     )
-    node_cloud.paint_uniform_color([1, 0, 0])   # red
 
-    vis.add_geometry(node_cloud)
+    # ---------------------------------
+    # Nodes
+    # ---------------------------------
 
-    #
+    node_cloud = \
+        o3d.geometry.PointCloud()
+
+    node_cloud.points = \
+        o3d.utility.Vector3dVector(
+            atc.map.positions[
+                :atc.map.node_count
+            ]
+        )
+
+    node_cloud.paint_uniform_color(
+        [1, 0, 0]
+    )
+
+    vis.add_geometry(
+        node_cloud
+    )
+
+    # ---------------------------------
     # Edges
-    #
+    # ---------------------------------
 
     lines = o3d.geometry.LineSet()
 
-    lines.points = o3d.utility.Vector3dVector(
-        atc.map.positions[:atc.map.node_count]
-    )
+    lines.points = \
+        o3d.utility.Vector3dVector(
+            atc.map.positions[
+                :atc.map.node_count
+            ]
+        )
 
     edge_slots = []
 
     for a, b in atc.map.edges():
 
         if (
-            a not in atc.map.id_to_slot or
+            a not in atc.map.id_to_slot
+            or
             b not in atc.map.id_to_slot
-        ):  
+        ):
             continue
 
         edge_slots.append([
@@ -824,26 +895,35 @@ def visualize_map(atc: ATCDT):
             atc.map.get_slot(b)
         ])
 
-    lines.lines = o3d.utility.Vector2iVector(
-        np.asarray(edge_slots, dtype=np.int32)
-    )
+    lines.lines = \
+        o3d.utility.Vector2iVector(
+            np.asarray(
+                edge_slots,
+                dtype=np.int32
+            )
+        )
 
     colors = np.tile(
         np.array([[0, 1, 0]]),
         (len(edge_slots), 1)
     )
 
-    lines.colors = o3d.utility.Vector3dVector(colors)
+    lines.colors = \
+        o3d.utility.Vector3dVector(
+            colors
+        )
 
     vis.add_geometry(lines)
 
     vis.run()
+
     vis.destroy_window()
+
 
 if __name__ == "__main__":
 
     dataset = ScanDataset(
-        "dataset/scans",
+        "dataset/scans"
     )
 
     scan = dataset[0]
@@ -853,7 +933,9 @@ if __name__ == "__main__":
         lambda_points=6000
     )
 
-    visualizer = ATCVisualizer(scan)
+    visualizer = ATCVisualizer(
+        scan
+    )
 
     visualizer.update(
         atc,
@@ -877,8 +959,14 @@ if __name__ == "__main__":
 
     print()
     print("Finished.")
-    print("Nodes :", atc.map.node_count)
-    print("Edges :", atc.map.num_edges())
+    print(
+        "Nodes :",
+        atc.map.node_count
+    )
+    print(
+        "Edges :",
+        atc.map.num_edges()
+    )
 
     visualizer.close()
 
