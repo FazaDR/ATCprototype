@@ -288,16 +288,16 @@ print("Total rays:", len(dirs))
 
 
 # ==========================================================
-# Dataset
+# DatasetFleeting
 # ==========================================================
 
 os.makedirs(
-    "dataset/scans",
+    "datasetFleeting/scans",
     exist_ok=True
 )
 
 pose_file = open(
-    "dataset/poses.csv",
+    "datasetFleeting/poses.csv",
     "w"
 )
 
@@ -352,7 +352,7 @@ ctr.set_zoom(0.35)
 
 
 # ==========================================================
-# Generate dataset
+# Generate datasetFleeting
 # ==========================================================
 
 for frame_id, origin in enumerate(scan_positions):
@@ -408,7 +408,7 @@ for frame_id, origin in enumerate(scan_positions):
     # ------------------------------------------------------
 
     scan_filename = (
-        f"dataset/scans/scan_{frame_id:06d}.csv"
+        f"datasetFleeting/scans/scan_{frame_id:06d}.csv"
     )
 
     header = (

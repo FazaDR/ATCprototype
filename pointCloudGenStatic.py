@@ -227,13 +227,13 @@ pcd.points = o3d.utility.Vector3dVector(hit_points)
 pcd.paint_uniform_color([1, 1, 0])
 
 # ==========================================================
-# Dataset output
+# DatasetStatic output
 # ==========================================================
 
-os.makedirs("dataset/scans", exist_ok=True)
+os.makedirs("datasetStatic/scans", exist_ok=True)
 
 pose_file = open(
-    "dataset/poses.csv",
+    "datasetStatic/poses.csv",
     "w"
 )
 
@@ -274,7 +274,7 @@ for origin in scan_positions:
     timestamp = time.time()
 
     scan_filename = (
-        f"dataset/scans/scan_{frame_id:06d}.csv"
+        f"datasetStatic/scans/scan_{frame_id:06d}.csv"
     )
 
     header = (
