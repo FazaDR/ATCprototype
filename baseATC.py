@@ -102,11 +102,9 @@ class TopologicalMap:
             dtype=np.int32
         )
 
-        new_positions[:self.node_count] = \
-            self.positions[:self.node_count]
+        new_positions[:self.node_count] = self.positions[:self.node_count]
 
-        new_node_ids[:self.node_count] = \
-            self.node_ids[:self.node_count]
+        new_node_ids[:self.node_count] = self.node_ids[:self.node_count]
 
         self.positions = new_positions
         self.node_ids = new_node_ids
@@ -160,8 +158,8 @@ class TopologicalMap:
 
     def add_edge(self, a: int, b: int):
 
-        self.graph[a][b] = 0
-        self.graph[b][a] = 0
+        self.graph[a][b] = 1
+        self.graph[b][a] = 1
 
     def remove_edge(self, a: int, b: int):
 
@@ -197,6 +195,13 @@ class TopologicalMap:
             dtype=np.float32
         )
 
+    def edge_ages_of(self, node_id: int):
+    
+            return np.asarray(
+                list(self.graph[node_id].values()),
+                dtype=np.float32
+            )
+
     def num_edges(self):
 
         count = 0
@@ -225,12 +230,14 @@ class TopologicalMap:
 
         return self.id_to_slot[node_id]
 
+    
+
 
 class ATCDT:
 
     def __init__(
         self,
-        vigilance=0.5,
+        vigilance=0.9,
         lambda_points=4000
     ):
 
@@ -250,6 +257,18 @@ class ATCDT:
             self.map.capacity,
             dtype=np.int32
         )
+
+
+    def initialize(self, point_cloud):
+
+        idx = np.random.choice(
+            len(point_cloud),
+            2,
+            replace=False
+        )
+
+        self.add_node(point_cloud[idx[0]])
+        self.add_node(point_cloud[idx[1]])
 
     def sample_points(self, points):
 
@@ -299,8 +318,7 @@ class ATCDT:
         if self.map.node_count == 0:
             return None, None, np.inf, np.inf
 
-        active_positions = \
-            self.map.positions[:self.map.node_count]
+        active_positions = self.map.positions[:self.map.node_count]
 
         dist = np.linalg.norm(
             active_positions - point,
@@ -330,8 +348,7 @@ class ATCDT:
 
         if dist[s2_slot] < dist[s1_slot]:
 
-            s1_slot, s2_slot = \
-                s2_slot, s1_slot
+            s1_slot, s2_slot = s2_slot, s1_slot
 
         d1 = dist[s1_slot]
         d2 = dist[s2_slot]
@@ -356,50 +373,36 @@ class ATCDT:
             10 * self.winner_count[winner_slot]
         )
 
-        self.map.positions[winner_slot] += \
-            lr * (
-                point -
-                self.map.positions[winner_slot]
-            )
+        self.map.positions[winner_slot] += lr * (point -self.map.positions[winner_slot])
 
         for neighbor in self.map.neighbors(winner):
 
-            neighbor_slot = \
-                self.map.get_slot(neighbor)
+            neighbor_slot = self.map.get_slot(neighbor)
 
             lr = 1.0 / (
                 100 *
                 self.winner_count[neighbor_slot]
             )
 
-            self.map.positions[neighbor_slot] += \
-                lr * (
-                    point -
-                    self.map.positions[neighbor_slot]
-                )
+            self.map.positions[neighbor_slot] += lr * (point - self.map.positions[neighbor_slot])
 
-    def remove_old_edges(self, gmax):
+    def remove_old_edges(self, s1, gmax):
 
         remove_edges = []
 
-        visited = set()
+        for neighbor in list(
+            self.map.neighbors(s1)
+        ):
 
-        for a in self.map.graph:
+            age = self.map.graph[s1][neighbor]
 
-            for b, age in self.map.graph[a].items():
+            if age > gmax:
 
-                if (b, a) in visited:
-                    continue
+                self.deleted_edge_ages.append(age)
 
-                visited.add((a, b))
-
-                if age > gmax:
-
-                    self.deleted_edge_ages.append(age)
-
-                    remove_edges.append(
-                        (a, b)
-                    )
+                remove_edges.append(
+                    (s1, neighbor)
+                )
 
         for a, b in remove_edges:
 
@@ -407,14 +410,21 @@ class ATCDT:
 
     def process_frame(self, point_cloud):
 
-        sampled = self.sample_points(
-            point_cloud
-        )
+        sampled = self.sample_points(point_cloud)
+
+        if self.map.node_count == 0:
+
+            if len(sampled) < 2:
+                return
+
+            self.initialize(sampled)
+
+            # Start learning after initialization
+            sampled = sampled[2:]
 
         for point in sampled:
 
-            s1, s2, d1, d2 = \
-                self.winner_search(point)
+            s1, s2, d1, d2 = self.winner_search(point)
 
             # --------------------------------------------------
             # Case (a): Add new node
@@ -425,8 +435,8 @@ class ATCDT:
 
                 self.add_node(point)
 
-                # Paper: after adding a node,
-                # continue to the next input point.
+                # Paper Step 3:
+                # after adding a node, go to the next input
                 continue
 
             # --------------------------------------------------
@@ -451,15 +461,15 @@ class ATCDT:
 
             # --------------------------------------------------
             # Case (c): Add/reset s1-s2 edge
-            # ds2 <= vigilance
+            # ds2 < vigilance
             # --------------------------------------------------
 
-            if d2 <= self.vigilance:
+            if d2 < self.vigilance:
 
                 if self.map.has_edge(s1, s2):
 
-                    self.map.graph[s1][s2] = 0
-                    self.map.graph[s2][s1] = 0
+                    self.map.graph[s1][s2] = 1
+                    self.map.graph[s2][s1] = 1
 
                 else:
 
@@ -468,28 +478,30 @@ class ATCDT:
                         s2
                     )
 
-        # ------------------------------------------------------
-        # Step 6: Update gmax and remove old edges
-        # ------------------------------------------------------
+            # --------------------------------------------------
+            # Step 6:
+            # Calculate gmax for THIS s1 and remove old edges
+            # --------------------------------------------------
 
-        gmax = self.compute_gmax()
+            gmax = self.compute_gmax(s1)
 
-        self.remove_old_edges(gmax)
+            self.remove_old_edges(
+                s1,
+                gmax
+            )
 
-    def compute_gthr(self):
+    def compute_gthr(self, gamma):
 
-        ages = self.map.edge_ages()
-
-        if len(ages) == 0:
+        if len(gamma) == 0:
             return np.inf
 
         q3 = np.percentile(
-            ages,
+            gamma,
             75
         )
 
         q1 = np.percentile(
-            ages,
+            gamma,
             25
         )
 
@@ -497,20 +509,14 @@ class ATCDT:
 
         return q3 + iqr
 
-    def compute_gmax(self):
+    def compute_gmax(self, s1):
 
-        current = self.map.edge_ages()
+        gamma = self.map.edge_ages_of(s1)
 
-        if len(current) < 4:
-
-            if len(self.deleted_edge_ages) > 0:
-                return np.mean(
-                    self.deleted_edge_ages
-                )
-
+        if len(gamma) == 0:
             return np.inf
 
-        gthr = self.compute_gthr()
+        gthr = self.compute_gthr(gamma)
 
         if len(self.deleted_edge_ages) == 0:
             return gthr
@@ -520,19 +526,22 @@ class ATCDT:
         )
 
         total = (
-            len(current) +
-            len(self.deleted_edge_ages)
+            len(self.deleted_edge_ages) +
+            len(gamma)
         )
 
-        weight = (
+        weight_deleted = (
             len(self.deleted_edge_ages) /
             total
         )
 
-        return (
-            gdel * weight +
-            gthr * (1.0 - weight)
+        gmax = (
+            gdel * weight_deleted
+            +
+            gthr * (1.0 - weight_deleted)
         )
+
+        return gmax
 
 
 class ScanDataset:
@@ -573,12 +582,7 @@ def visualize_map(atc: ATCDT):
 
     node_cloud = o3d.geometry.PointCloud()
 
-    node_cloud.points = \
-        o3d.utility.Vector3dVector(
-            atc.map.positions[
-                :atc.map.node_count
-            ]
-        )
+    node_cloud.points = o3d.utility.Vector3dVector(atc.map.positions[:atc.map.node_count])
 
     node_cloud.paint_uniform_color(
         [1, 0, 0]
@@ -592,12 +596,7 @@ def visualize_map(atc: ATCDT):
 
     lines = o3d.geometry.LineSet()
 
-    lines.points = \
-        o3d.utility.Vector3dVector(
-            atc.map.positions[
-                :atc.map.node_count
-            ]
-        )
+    lines.points = o3d.utility.Vector3dVector(atc.map.positions[:atc.map.node_count])
 
     edge_slots = []
 
@@ -615,23 +614,14 @@ def visualize_map(atc: ATCDT):
             atc.map.get_slot(b)
         ])
 
-    lines.lines = \
-        o3d.utility.Vector2iVector(
-            np.asarray(
-                edge_slots,
-                dtype=np.int32
-            )
-        )
+    lines.lines = o3d.utility.Vector2iVector(np.asarray(edge_slots,dtype=np.int32))
 
     colors = np.tile(
         np.array([[0, 1, 0]]),
         (len(edge_slots), 1)
     )
 
-    lines.colors = \
-        o3d.utility.Vector3dVector(
-            colors
-        )
+    lines.colors = o3d.utility.Vector3dVector(colors)
 
     vis.add_geometry(lines)
 
@@ -643,12 +633,12 @@ def visualize_map(atc: ATCDT):
 if __name__ == "__main__":
 
     dataset = ScanDataset(
-        "dataset/scans",
+        "datasetStatic/scans",
     )
 
     atc = ATCDT(
-        vigilance=0.3,
-        lambda_points=6000
+        vigilance=0.9,
+        lambda_points=9999999
     )
 
     for i in range(len(dataset)):
@@ -659,8 +649,18 @@ if __name__ == "__main__":
             f"Processing frame {i} "
             f"({len(scan)} points)"
         )
+        
+        if atc.map.node_count == 0:
+
+            atc.initialize(scan)
 
         atc.process_frame(scan)
+
+        print(
+            f"Frame {i} complete | "
+            f"Nodes: {atc.map.node_count} | "
+            f"Edges: {atc.map.num_edges()}"
+        )
 
     print()
     print("Finished.")
