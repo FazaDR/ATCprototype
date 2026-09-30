@@ -272,7 +272,8 @@ class ATCDT:
         self.horizontal_band = horizontal_band
         self.free_area_distance = free_area_distance
 
-        self.deleted_edge_ages = []
+        self.deleted_edge_count = 0
+        self.deleted_edge_mean = 0.0
 
         self.map = TopologicalMap()
 
@@ -481,26 +482,34 @@ class ATCDT:
     # ==========================================================
 
     def remove_old_edges(self, s1, gmax):
-
-        remove_edges = []
-
-        for neighbor in list(
-            self.map.neighbors(s1)
-        ):
-
-            age = self.map.graph[s1][neighbor]
-
-            if age > gmax:
-
-                self.deleted_edge_ages.append(age)
-
-                remove_edges.append(
-                    (s1, neighbor)
-                )
-
-        for a, b in remove_edges:
-
-            self.map.remove_edge(a, b)
+    
+            remove_edges = []
+    
+            for neighbor in list(
+                self.map.neighbors(s1)
+            ):
+    
+                age = self.map.graph[s1][neighbor]
+    
+                if age > gmax:
+    
+                    # ------------------------------------------
+                    # Update running mean of deleted edge ages
+                    # ------------------------------------------
+    
+                    self.deleted_edge_count += 1
+    
+                    self.deleted_edge_mean += (
+                        age - self.deleted_edge_mean
+                    ) / self.deleted_edge_count
+    
+                    remove_edges.append(
+                        (s1, neighbor)
+                    )
+    
+            for a, b in remove_edges:
+    
+                self.map.remove_edge(a, b)
 
     def compute_gthr(self, gamma):
 
@@ -531,20 +540,20 @@ class ATCDT:
 
         gthr = self.compute_gthr(gamma)
 
-        if len(self.deleted_edge_ages) == 0:
+        # No deleted-edge history yet
+        if self.deleted_edge_count == 0:
             return gthr
 
-        gdel = np.mean(
-            self.deleted_edge_ages
-        )
+        # Mean age of all previously deleted edges
+        gdel = self.deleted_edge_mean
 
         total = (
-            len(self.deleted_edge_ages) +
+            self.deleted_edge_count +
             len(gamma)
         )
 
         weight_deleted = (
-            len(self.deleted_edge_ages) /
+            self.deleted_edge_count /
             total
         )
 

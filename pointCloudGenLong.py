@@ -60,7 +60,7 @@ def lidar_scan(scene, origin, dirs):
 ROOM_WIDTH = 6.0
 
 # Very long environment
-ROOM_LENGTH = 100.0
+ROOM_LENGTH = 2000.0
 
 # Wall dimensions
 ROOM_HEIGHT = 3.0
@@ -530,7 +530,7 @@ for frame_id, origin in enumerate(scan_positions):
     # Small delay
     # ------------------------------------------------------
 
-    time.sleep(0.5)
+    time.sleep(0.05)
 
 
 # ==========================================================

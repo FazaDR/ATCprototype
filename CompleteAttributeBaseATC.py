@@ -44,6 +44,7 @@ class TopologicalMap:
             (self.capacity, 3),
             dtype=np.float32
         )
+        
 
         self.normals = np.zeros((self.capacity, 3), dtype=np.float32)       # h_nor
         self.slope_angles = np.zeros(self.capacity, dtype=np.float32)       # deg_i (radians)
@@ -270,7 +271,9 @@ class ATCDT:
         self.vigilance = vigilance
         self.lambda_points = lambda_points
 
-        self.deleted_edge_ages = []
+        self.deleted_edge_count = 0
+        self.deleted_edge_mean = 0.0
+
         self.map = TopologicalMap()
         self.winner_count = np.zeros(self.map.capacity, dtype=np.int32)
 
@@ -422,26 +425,34 @@ class ATCDT:
         )
 
     def remove_old_edges(self, s1, gmax):
-
-        remove_edges = []
-
-        for neighbor in list(
-            self.map.neighbors(s1)
-        ):
-
-            age = self.map.graph[s1][neighbor]
-
-            if age > gmax:
-
-                self.deleted_edge_ages.append(age)
-
-                remove_edges.append(
-                    (s1, neighbor)
-                )
-
-        for a, b in remove_edges:
-
-            self.map.remove_edge(a, b)
+    
+            remove_edges = []
+    
+            for neighbor in list(
+                self.map.neighbors(s1)
+            ):
+    
+                age = self.map.graph[s1][neighbor]
+    
+                if age > gmax:
+    
+                    # ------------------------------------------
+                    # Update running mean of deleted edge ages
+                    # ------------------------------------------
+    
+                    self.deleted_edge_count += 1
+    
+                    self.deleted_edge_mean += (
+                        age - self.deleted_edge_mean
+                    ) / self.deleted_edge_count
+    
+                    remove_edges.append(
+                        (s1, neighbor)
+                    )
+    
+            for a, b in remove_edges:
+    
+                self.map.remove_edge(a, b)
 
     def process_frame(self, point_cloud):
 
@@ -568,6 +579,7 @@ class ATCDT:
 
         return q3 + iqr
 
+
     def compute_gmax(self, s1):
 
         gamma = self.map.edge_ages_of(s1)
@@ -577,20 +589,20 @@ class ATCDT:
 
         gthr = self.compute_gthr(gamma)
 
-        if len(self.deleted_edge_ages) == 0:
+        # No deleted-edge history yet
+        if self.deleted_edge_count == 0:
             return gthr
 
-        gdel = np.mean(
-            self.deleted_edge_ages
-        )
+        # Mean age of all previously deleted edges
+        gdel = self.deleted_edge_mean
 
         total = (
-            len(self.deleted_edge_ages) +
+            self.deleted_edge_count +
             len(gamma)
         )
 
         weight_deleted = (
-            len(self.deleted_edge_ages) /
+            self.deleted_edge_count /
             total
         )
 
@@ -601,6 +613,7 @@ class ATCDT:
         )
 
         return gmax
+    
 
     def estimate_normal(self, s1):
         neighbor_ids = list(self.map.neighbors(s1))

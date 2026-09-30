@@ -245,7 +245,8 @@ class ATCDT:
         self.lambda_points = lambda_points
 
         # Γdel
-        self.deleted_edge_ages = []
+        self.deleted_edge_count = 0
+        self.deleted_edge_mean = 0.0
 
         # Positional topology:
         #
@@ -398,7 +399,15 @@ class ATCDT:
 
             if age > gmax:
 
-                self.deleted_edge_ages.append(age)
+                # ------------------------------------------
+                # Update running mean of deleted edge ages
+                # ------------------------------------------
+
+                self.deleted_edge_count += 1
+
+                self.deleted_edge_mean += (
+                    age - self.deleted_edge_mean
+                ) / self.deleted_edge_count
 
                 remove_edges.append(
                     (s1, neighbor)
@@ -518,20 +527,20 @@ class ATCDT:
 
         gthr = self.compute_gthr(gamma)
 
-        if len(self.deleted_edge_ages) == 0:
+        # No deleted-edge history yet
+        if self.deleted_edge_count == 0:
             return gthr
 
-        gdel = np.mean(
-            self.deleted_edge_ages
-        )
+        # Mean age of all previously deleted edges
+        gdel = self.deleted_edge_mean
 
         total = (
-            len(self.deleted_edge_ages) +
+            self.deleted_edge_count +
             len(gamma)
         )
 
         weight_deleted = (
-            len(self.deleted_edge_ages) /
+            self.deleted_edge_count /
             total
         )
 
