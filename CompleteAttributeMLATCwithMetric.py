@@ -13,23 +13,9 @@ import time
 class TopologicalMap:
 
     def __init__(self):
-
-        # -----------------------------
-        # Node storage
-        # -----------------------------
-
-        # Number of currently active nodes
         self.node_count = 0
-
-        # Next globally unique node ID
         self.next_node_id = 0
-
-        # Allocated storage capacity
         self.capacity = 1024
-
-        # Dense positional node storage.
-        #
-        # Only [0 : node_count] contains active nodes.
         self.positions = np.empty(
             (self.capacity, 3),
             dtype=np.float32
@@ -55,29 +41,12 @@ class TopologicalMap:
             dtype=bool
         )
 
-        # Stable node ID stored at each array slot.
-        #
-        # Example:
-        #   node_ids[0] = 7
-        #   node_ids[1] = 12
-        #
-        # These are NOT necessarily equal to the array index.
         self.node_ids = np.empty(
             self.capacity,
             dtype=np.int32
         )
 
-        # Stable node ID -> array slot
-        #
-        # Example:
-        #   id_to_slot[12] = 1
         self.id_to_slot: Dict[int, int] = {}
-
-        # -----------------------------
-        # Edge set E_pos
-        # graph[a][b] = edge age
-        # -----------------------------
-
         self.graph: Dict[int, Dict[int, int]] = defaultdict(dict)
 
     def edges(self):
@@ -132,10 +101,6 @@ class TopologicalMap:
             dtype=bool
         )
 
-        # ----------------------------------------------
-        # Copy active nodes
-        # ----------------------------------------------
-
         new_positions[:self.node_count] = (
             self.positions[:self.node_count]
         )
@@ -160,10 +125,6 @@ class TopologicalMap:
             self.contour[:self.node_count]
         )
 
-        # ----------------------------------------------
-        # Replace storage
-        # ----------------------------------------------
-
         self.positions = new_positions
         self.node_ids = new_node_ids
 
@@ -174,17 +135,7 @@ class TopologicalMap:
 
         self.capacity = new_capacity
 
-    # ==========================================================
-    # Node Operations
-    # ==========================================================
-
     def add_node(self, position: np.ndarray) -> int:
-        """
-        Add a new positional node.
-
-        Returns a stable node ID.
-        """
-
         if self.node_count >= self.capacity:
             self._grow_capacity()
 
@@ -197,23 +148,12 @@ class TopologicalMap:
 
         node_id = self.next_node_id
         self.next_node_id += 1
-
-        # Store node position
         self.positions[slot] = position
-
-        # Store stable node ID
         self.node_ids[slot] = node_id
-
-        # ID -> slot
         self.id_to_slot[node_id] = slot
-
         self.node_count += 1
 
         return node_id
-
-    # ==========================================================
-    # Edge Operations
-    # ==========================================================
 
     def has_edge(self, a: int, b: int) -> bool:
 
@@ -232,10 +172,6 @@ class TopologicalMap:
     def neighbors(self, node_id: int):
 
         return self.graph[node_id].keys()
-
-    # ==========================================================
-    # Utilities
-    # ==========================================================
 
     def edge_ages(self):
 
@@ -321,18 +257,12 @@ class ATCDT:
         self.deleted_edge_count = 0
         self.deleted_edge_mean = 0.0
 
-        # --------------------------------------------------
-        # Attribute configuration
-        # --------------------------------------------------
-
         self.enable_attributes = enable_attributes
 
         self.deg_max = deg_max
 
         self.theta_thr = theta_thr
 
-        # Dataset is Y-up.
-        # Gravity therefore points toward -Y.
         self.gravity = (
             np.array(
                 [0.0, -1.0, 0.0],
@@ -367,8 +297,6 @@ class ATCDT:
             self.winner_count = new_winner_count
 
         slot = self.map.get_slot(node_id)
-
-        # Paper Eq. (3): M_N+1 = 1
         self.winner_count[slot] = 1
 
         return node_id
@@ -382,10 +310,6 @@ class ATCDT:
         if self.map.node_count == 0:
 
             return None, None, np.inf, np.inf
-
-        # ---------------------------------
-        # Candidate nodes
-        # ---------------------------------
 
         if candidates is None:
 
@@ -408,20 +332,12 @@ class ATCDT:
 
                 return None, None, np.inf, np.inf
 
-        # ---------------------------------
-        # Distance
-        # ---------------------------------
-
         positions = self.map.positions[slots]
 
         dist = np.linalg.norm(
             positions - point,
             axis=1
         )
-
-        # ---------------------------------
-        # One candidate
-        # ---------------------------------
 
         if len(slots) == 1:
 
@@ -433,10 +349,6 @@ class ATCDT:
                 float(dist[0]),
                 np.inf
             )
-
-        # ---------------------------------
-        # Two nearest candidates
-        # ---------------------------------
 
         order = np.argpartition(
             dist,
@@ -606,12 +518,7 @@ class ATCDT:
             s1,
             gmax
         )
-
-        # --------------------------------------------------
-        # Layer-1 attributes
-        #
-        # Upper layers have enable_attributes=False.
-        # --------------------------------------------------
+        # Layer-1 attributes Upper layers have enable_attributes=False.
 
         if self.enable_attributes:
 
@@ -640,10 +547,6 @@ class ATCDT:
             age = self.map.graph[s1][neighbor]
 
             if age > gmax:
-
-                # ------------------------------------------
-                # Update running mean of deleted edge ages
-                # ------------------------------------------
 
                 self.deleted_edge_count += 1
 
@@ -770,9 +673,6 @@ class ATCDT:
         )
 
         angle = np.arccos(cos_theta)
-
-        # PCA normal has arbitrary sign.
-        # Fold to acute angle from vertical.
         angle = min(
             angle,
             np.pi - angle
@@ -931,42 +831,6 @@ class ScanDataset:
         ).astype(np.float32)
 
 
-# class NPZPositionDataset:
-
-#     def __init__(self, path):
-
-#         self.path = Path(path)
-
-#         if not self.path.exists():
-#             raise FileNotFoundError(
-#                 f"File not found: {self.path}"
-#             )
-
-#     def __len__(self):
-
-#         return 1
-
-#     def __getitem__(self, idx):
-
-#         if idx != 0:
-#             raise IndexError(
-#                 "NPZPositionDataset contains only one file"
-#             )
-
-#         data = np.load(
-#             self.path
-#         )
-
-#         if "positions" not in data:
-
-#             raise KeyError(
-#                 f"'positions' not found in {self.path}"
-#             )
-
-#         return data["positions"].astype(
-#             np.float32
-#         )
-
 
 class Hierarchy:
 
@@ -1042,28 +906,6 @@ class Hierarchy:
         return child_id in self.parent[
             upper_layer
         ]
-
-    # def remove_relationship(
-    #     self,
-    #     upper_layer,
-    #     child_id
-    # ):
-
-    #     parent_id = self.parent[
-    #         upper_layer
-    #     ].pop(
-    #         child_id,
-    #         None
-    #     )
-
-    #     if parent_id is None:
-    #         return
-
-    #     self.children[
-    #         upper_layer
-    #     ][parent_id].discard(
-    #         child_id
-    #     )
 
 
 
@@ -1166,10 +1008,6 @@ class MLATC:
             for _ in range(num_layers)
         ]
 
-        # --------------------------------------------------
-        # Search from top layer -> bottom layer
-        # --------------------------------------------------
-
         for layer_index in range(
             num_layers - 1,
             -1,
@@ -1180,10 +1018,6 @@ class MLATC:
                 layer_index
             ]
 
-            # ----------------------------------------------
-            # Top layer
-            # ----------------------------------------------
-
             if layer_index == num_layers - 1:
 
                 candidates = (
@@ -1191,10 +1025,6 @@ class MLATC:
                         :layer.map.node_count
                     ].tolist()
                 )
-
-            # ----------------------------------------------
-            # Lower layers
-            # ----------------------------------------------
 
             else:
 
@@ -1216,10 +1046,6 @@ class MLATC:
                     candidates.update(
                         children
                     )
-
-                # ------------------------------------------
-                # Eq. (18)
-                # ------------------------------------------
 
                 rho_search = (
                     self.search_vigilance(
@@ -1261,10 +1087,6 @@ class MLATC:
                 ]
 
                 continue
-
-            # ----------------------------------------------
-            # Top layer sorting
-            # ----------------------------------------------
 
             distances = []
 
@@ -1348,10 +1170,6 @@ class MLATC:
                 "exactly two nodes."
             )
 
-        # --------------------------------------------------
-        # Existing top-layer nodes
-        # --------------------------------------------------
-
         first_id = int(
             old_top.map.node_ids[0]
         )
@@ -1372,37 +1190,21 @@ class MLATC:
             ).copy()
         )
 
-        # --------------------------------------------------
-        # Create new upper layer
-        # --------------------------------------------------
-
         new_layer_index = self.add_layer()
 
         new_layer = self.layers[
             new_layer_index
         ]
 
-        # --------------------------------------------------
-        # Inherit first node as root
-        # --------------------------------------------------
-
         root_id = new_layer.add_node(
             first_position
         )
-
-        # --------------------------------------------------
-        # First old top node becomes child
-        # --------------------------------------------------
 
         self.hierarchy.add_relationship(
             new_layer_index,
             root_id,
             first_id
         )
-
-        # --------------------------------------------------
-        # Second old top node becomes input
-        # --------------------------------------------------
 
         s1, s2, d1, d2 = (
             new_layer.winner_search(
@@ -1419,10 +1221,6 @@ class MLATC:
                 d2
             )
         )
-
-        # --------------------------------------------------
-        # Determine parent of second node
-        # --------------------------------------------------
 
         if new_node_id is None:
 
@@ -1514,7 +1312,7 @@ class MLATC:
 
     
 
-def visualize_mlatc1(
+def visualize_mlatc(
     mlatc: MLATC,
     vertical_offset: float = 5.0
 ):
@@ -1808,27 +1606,19 @@ def save_mlatc_map_and_plot(
 if __name__ == "__main__":
 
     dataset = ScanDataset(
-        "../datasetShowcase/scans"
+        "datasetLong/scans"
     )
 
     mlatc = MLATC(
         base_vigilance=0.5,
         alpha=4.0,
-        lambda_points=9999999,
+        lambda_points=3500,  # FYI long dataset have around like 5500k point (500)
         seed=42
     )
-
-    # --------------------------------------------------
-    # Per-frame records
-    # --------------------------------------------------
 
     process_times = []
     node_counts = []
     layer1_node_counts = []
-
-    # --------------------------------------------------
-    # Process dataset
-    # --------------------------------------------------
 
     for i in range(len(dataset)):
 
@@ -1839,28 +1629,16 @@ if __name__ == "__main__":
             f"({len(scan)} points)"
         )
 
-        # ----------------------------------------------
-        # Start timer
-        # ----------------------------------------------
-
         start_time = time.perf_counter()
 
         mlatc.process_frame(
             scan
         )
 
-        # ----------------------------------------------
-        # Stop timer
-        # ----------------------------------------------
-
         process_time = (
             time.perf_counter()
             - start_time
         )
-
-        # ----------------------------------------------
-        # Total node count across all layers
-        # ----------------------------------------------
 
         total_nodes = sum(
             layer.map.node_count
@@ -1908,10 +1686,6 @@ if __name__ == "__main__":
                 f"Edges = {layer.map.num_edges()}"
             )
 
-    # --------------------------------------------------
-    # Print recorded lists
-    # --------------------------------------------------
-
     print()
     print("Total node count per frame:")
     print(node_counts)
@@ -1923,10 +1697,6 @@ if __name__ == "__main__":
     print()
     print("Process time per frame (seconds):")
     print(process_times)
-
-    # --------------------------------------------------
-    # Final map information
-    # --------------------------------------------------
 
     print()
 
@@ -1949,22 +1719,15 @@ if __name__ == "__main__":
             layer.map.num_edges()
         )
 
-    # --------------------------------------------------
-    # Save final MLATC map
-    # --------------------------------------------------
-
     save_mlatc_map_and_plot(
         mlatc,
         node_counts,
         layer1_node_counts,
         process_times,
-        "mapsShow/local_mlatc_show_0.5.npz"
+        "local_mlatc_show_0.5.npz"
     )
-    # --------------------------------------------------
-    # Open3D visualization
-    # --------------------------------------------------
 
-    visualize_mlatc1(
+    visualize_mlatc(
         mlatc,
         5.0
     )

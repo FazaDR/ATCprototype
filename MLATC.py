@@ -577,12 +577,12 @@ class ATCDT:
             self.deleted_edge_count +
             len(gamma)
         )
-
+        
         weight_deleted = (
             self.deleted_edge_count /
             total
         )
-
+        
         gmax = (
             gdel * weight_deleted
             +
